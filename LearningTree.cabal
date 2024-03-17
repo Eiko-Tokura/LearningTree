@@ -61,6 +61,8 @@ executable LearningManager
     other-modules:    LearningTree
                     , AutoInput
 		    , LearningPlan
+		    , MonParserF
+		    , ProgressBar
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
@@ -70,6 +72,7 @@ executable LearningManager
                     , containers
 		    , time
 		    , transformers
+		    , directory
 
 
     -- Directories containing source files.

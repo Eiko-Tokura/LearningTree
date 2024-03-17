@@ -32,16 +32,17 @@ newtype Data (input :: InputMode) a = Data {unData :: a} deriving (Show, Read, E
 -- this data type is used to mark whether the data should be prompted to let the user to input
 -- any type wrapped with Data NoInput will be skipped, replacing with a default value
 
-class Default a where
-  def :: a
+class DefaultIO a where
+  def :: IO a
 
-instance Default String where def = ""
-instance Default Int where def = 0
+instance DefaultIO String where def = return ""
+instance DefaultIO Int where def = return 0
+instance DefaultIO Day where def = utctDay <$> getCurrentTime
 
 instance AskUserInput a => AskUserInput (Data UserInput a) where
   askUserInput = fmap Data <$> askUserInput
-instance (Default a) => AskUserInput (Data NoInput a) where
-  askUserInput = return $ Just (Data def)
+instance (DefaultIO a) => AskUserInput (Data NoInput a) where
+  askUserInput = Just . Data <$> def
 
 class AskUserInput a where
   askUserInput :: IO (Maybe a) -- this class provides a way to get user input
@@ -109,4 +110,11 @@ safeInput = do
   case readMaybe input of
     Just x -> return x
     Nothing -> putStrLn "Invalid input, please try again." >> safeInput
+
+safeAskUserInput :: (AskUserInput a) => IO a
+safeAskUserInput = do
+  input <- askUserInput
+  case input of
+    Just x -> return x
+    Nothing -> putStrLn "Invalid input, please try again." >> safeAskUserInput
 

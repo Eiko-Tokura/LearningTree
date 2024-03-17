@@ -1,10 +1,12 @@
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
-{-# LANGUAGE ScopedTypeVariables, FlexibleContexts, FlexibleInstances, DeriveGeneric, DerivingVia, DataKinds, ConstraintKinds, KindSignatures, TypeApplications #-}
+{-# LANGUAGE GADTs, ScopedTypeVariables, FlexibleContexts, FlexibleInstances, DeriveGeneric, DerivingVia, DataKinds, ConstraintKinds, KindSignatures, TypeApplications #-}
 module LearningTree 
   ( Finite(..), Priority(..), Subject(..), TaskType(..), Status(..), Target(..), ProgressInt(..), ProgressTrackingType(..), Progress(..), ProgressTracking
   , ProjectData(..), TimeData(..), NodeType(..), Description(..), LearningUnit(..), ProjectTree(..), getUnitN, getUnitE
   , addTask, addProject, upgradeTaskToProject, localChangeTree, removeTaskOrProj, NodePath, ErrMsg
-  , newTask, newProject, exampleProjectTree, prettyPrint, PrintMode(..)
+  , newTask, newProject, exampleProjectTree, PrettyPrint(..), PrintMode(..)
+  , LU(..), OverallPriority(..), AskUserInput(..), LocalFunction, updateProgressFromTasks
+  , setStatus, setProgress, setLU, getSubTree
   ) where
 
 import AutoInput
@@ -13,6 +15,7 @@ import Data.Time
 import Data.Proxy
 import Data.Coerce
 import Data.Functor
+import Data.Monoid
 import GHC.Generics
 import GHC.TypeLits
 import Text.Read (readMaybe)
@@ -63,9 +66,12 @@ newtype Target = Target { targetName :: String } deriving (Show, Eq, Ord, Read) 
 data ProgressInt = ProgressInt Int Int deriving (Show, Eq, Ord, Read) -- progress of a task, a fraction.
 newtype ProgressTrackingType = ProgressTrackingType { progressTrackingTypeName :: String } deriving (Show, Eq, Ord, Read) -- user defined
 
+addProgInt :: ProgressInt -> ProgressInt -> ProgressInt
+addProgInt (ProgressInt a b) (ProgressInt c d) = ProgressInt (a+c) (b+d)
+
 data Progress = Progress
   { progressType :: ProgressTrackingType -- user defined progress tracking methods
-  , target       :: Target  -- user defined target, like specific books
+  , targets      :: S.Set Target  -- user defined target, like specific books
   , progress     :: ProgressInt -- progress of a task, a fraction with two integers.
   } deriving (Show, Eq, Ord, Read, Generic)
 
@@ -111,11 +117,13 @@ data TimeData = TimeData
   { dateCreated :: Day
   , startDate   :: Day
   , endDate     :: Day
+  , currentTime :: Data NoInput Day
   } deriving (Show, Read, Ord, Eq, Generic)
 
 instance AskUserInput TimeData
 
-data NodeType = TaskNode | ProjectNode | NoType -- used only at the type level, to distinguish between tasks and projects
+data NodeType = TaskNode | ProjectNode | NoType  deriving (Show, Read, Eq, Ord)
+-- used only at the type level, to distinguish between tasks and projects
 
 data Description = Description 
   { title   :: String
@@ -123,6 +131,12 @@ data Description = Description
   } deriving (Show, Read, Eq, Ord, Generic)
 
 instance AskUserInput Description
+
+-- wrap LearningUnit in GADT
+
+data LU (n :: NodeType) where
+  TaskLU :: LearningUnit TaskNode    -> LU TaskNode
+  ProjLU :: LearningUnit ProjectNode -> LU ProjectNode
 
 data LearningUnit (n :: NodeType) = LearningUnit 
   { description      :: Data UserInput Description
@@ -136,20 +150,20 @@ type NInt = Data NoInput Int
 
 instance AskUserInput (LearningUnit n)
 
-data ProjectTree =
-  Task (LearningUnit TaskNode) -- leaf node
+data ProjectTree 
+  = Task (LearningUnit TaskNode) -- leaf node
   | Project (LearningUnit ProjectNode) ProjectData !(M.Map NInt ProjectTree)
   deriving (Show, Read)
 
 instance AskUserInput (S.Set TaskType) where 
   askUserInput = do
-    putStrLn "input task types (separated by space):"
+    putStrLn "input task types (separated by space, can be empty):"
     input <- getLine
     return $ Just . S.fromList . map TaskType . words $ input
 
 instance AskUserInput ProgressTracking where
   askUserInput = do
-    putStrLn "in which ways do you want to track your progress? (you can have multiple methods, like 'notes' or 'pages'. separated by space):"
+    putStrLn "in which ways do you want to track your progress? (you can have multiple methods, like 'notes' or 'pages'. separated by space, can be empty):"
     input <- getLine
     let methods = words input
     progress <- mapM (\method -> do
@@ -159,7 +173,7 @@ instance AskUserInput ProgressTracking where
       goal <- safeInput
       putStrLn $ "what is the current progress for " ++ method ++ "? (like '10' or '20'):"
       current <- safeInput
-      return $ Progress (ProgressTrackingType method) (Target target) (ProgressInt current goal)
+      return $ Progress (ProgressTrackingType method) (S.singleton $ Target target) (ProgressInt current goal)
       ) methods
     return $ pure $ S.fromList progress
 
@@ -179,6 +193,10 @@ getUnitE :: ProjectTree -> Either (LearningUnit TaskNode) (LearningUnit ProjectN
 getUnitE (Task u) = Left u
 getUnitE (Project u _ _) = Right u
 
+getLU :: ProjectTree -> Either (LU TaskNode) (LU ProjectNode) -- enriched type info, for pattern matching
+getLU (Task u) = Left $ TaskLU u
+getLU (Project u _ _) = Right $ ProjLU u
+
 type ErrMsg = String
 
 newTask :: LearningUnit TaskNode -> ProjectTree
@@ -186,6 +204,18 @@ newTask = Task
 
 newProject :: LearningUnit ProjectNode -> ProjectData -> ProjectTree
 newProject learnUnit projData = Project learnUnit projData M.empty
+
+setStatus :: Status -> LocalFunction -- ProjectTree -> Either ErrMsg ProjectTree
+setStatus status (Task learnUnit) = Right $ Task learnUnit { status = Data status }
+setStatus status (Project learnUnit projData projects) = Right $ Project learnUnit { status = Data status } projData projects
+
+setProgress :: ProgressTracking -> LocalFunction -- ProjectTree -> Either ErrMsg ProjectTree, you should only set progress to a task
+setProgress progress (Task learnUnit) = Right $ Task learnUnit { progressTracking = Data progress }
+setProgress _ (Project {}) = Left "Cannot set progress to a project! You can only set progress to a task."
+
+setLU :: LearningUnit NoType -> LocalFunction -- ProjectTree -> Either ErrMsg ProjectTree
+setLU learnUnit (Task _) = Right $ Task (coerce learnUnit)
+setLU learnUnit (Project _ projData projects) = Right $ Project (coerce learnUnit) projData projects
 
 addTask 
   :: LearningUnit TaskNode -- the task to be added, cannot add a project as it requires a ProjectData
@@ -212,6 +242,19 @@ addProject learnUnit projData (Project learnUnit' projData' projects) = Right $ 
 upgradeTaskToProject :: ProjectData -> LocalFunction -- ProjectTree -> Either ErrMsg ProjectTree
 upgradeTaskToProject _ Project{} = Left "Cannot upgrade a project to a project! You can only upgrade a task to a project."
 upgradeTaskToProject projData (Task learnUnit) = Right $ Project (coerce learnUnit) projData M.empty -- coerce is safe here because we are sure that the type is TaskNode, and the target type is ProjectNode
+
+getSubTree :: NodePath -> ProjectTree -> Either ErrMsg ProjectTree
+getSubTree [] tree = Right tree
+getSubTree (x:xs) (Project _ _ projects) = 
+  case M.lookup (Data x) projects of
+    Nothing -> Left "Invalid path"
+    Just t -> getSubTree xs t
+getSubTree (_:_) (Task _) = Left "Invalid path"
+
+instance AskUserInput [Int] where
+  askUserInput = do
+    putStrLn "input the path of the node you want to access (separated by space, like 1 2, empty for root):"
+    mapM readMaybe . words <$> getLine
 
 type LocalFunction = ProjectTree -> Either ErrMsg ProjectTree
 type NodePath = [Int] -- the path to a node, like [1,2,3] means the 3rd child of the 2nd child of the 1st child of the root
@@ -243,6 +286,23 @@ removeTaskOrProj (Project l p projects) (x:y:ys) =
   case M.lookup (Data x) projects of
     Nothing -> Left "Invalid path"
     Just subproj -> removeTaskOrProj subproj (y:ys) <&> \new -> Project l p $ M.update (const $ Just new) (Data x) projects
+
+mergeProgressOfSameType p1 p2 = Progress (progressType p1) (targets p1 `S.union` targets p2) (progress p1 `addProgInt` progress p2)
+
+sumProgressByType :: [ProgressTracking] -> ProgressTracking -- = S.Set Progress
+sumProgressByType list = 
+  let l  = map (\prog -> (progressType prog, prog)) $ concatMap S.toList list
+      m  = M.fromListWith mergeProgressOfSameType l
+      m' = M.unionsWith mergeProgressOfSameType
+         $ map (uncurry M.singleton) l
+  in S.fromList $ M.elems m'
+
+updateProgressFromTasks :: ProjectTree -> ProjectTree -- this function updates all the progress of projects from the progress of its children, eventually relying only on the leaf nodes
+updateProgressFromTasks (Task u) = Task u
+updateProgressFromTasks (Project u p projects) = Project u' p projects'
+  where u' = u { progressTracking = Data $ sumProgressByType $ map (unData . progressTracking . getUnitN . snd) $ M.toList projects' }
+        projects' =  updateProgressFromTasks <$> projects
+
 -- we need to provide an interface to manage study plans
 -- I think we should organize the subjects in a tree, allowing us to break down big tasks into smaller ones, and complete them part by part.
 -- for example I want to learn Haskell, I can break it down into smaller tasks, like learning the syntax, learning the type system, learning the IO system, etc.
@@ -271,36 +331,18 @@ class PrettyPrint a where
   prettyPrint :: PrintMode -> a -> String
 
 --type FilterMode = Maybe (
-instance PrettyPrint ProjectTree where
-  prettyPrint mode = withPadding 0
-    where
-      withPadding :: Int -> ProjectTree -> String
-      withPadding n (Task u)               = padding n ++ task (prettyPrint mode u)
-      withPadding n (Project u _ projects) = padding n ++ project (prettyPrint mode u ++ "\n" ++ M.foldMapWithKey (\_ v -> withPadding (n+1) v ++ "\n") projects)
-      padding n = replicate (n*2) ' '
-      task s = case mode of
-        Concise -> s
-        Verbose -> s
-        SystemShow -> "(Task " ++ s ++ ")"
-      project s = case mode of
-        Concise -> s
-        Verbose -> s
-        SystemShow -> "(Project " ++ s ++ ")"
-
-instance PrettyPrint (LearningUnit a) where
-  prettyPrint Concise u = show (relativeId u) ++ "->" ++ title (unData $ description u) -- ++ "  " ++ show (startDate (timeData u)) ++ "~" ++ show (endDate (timeData u))
-  prettyPrint Verbose u = show (relativeId u) ++ "->" ++ title (unData $ description u) ++ " " ++ show (timeData u) ++ " " ++ show (taskType u) ++ " " ++ show (progressTracking u) ++ " " ++ show (status u)
-  prettyPrint SystemShow u = show u
 
 exampleProjectTree :: ProjectTree
-exampleProjectTree = 
+exampleProjectTree = updateProgressFromTasks $
   Project 
     (LearningUnit 
       (Data $ Description "Math" "Learn Math")
       (Data $ TimeData 
         (fromGregorian 2021 1 1) 
         (fromGregorian 2021 1 1) 
-        (fromGregorian 2021 1 1)) 
+        (fromGregorian 2021 3 1)
+        (Data $ fromGregorian 2021 2 1)
+      ) 
       (Data $ S.singleton (TaskType "exam")) 
       (Data S.empty) (Data NotStarted)
       (Data 1)
@@ -309,7 +351,7 @@ exampleProjectTree =
   (M.fromList [ (1, Task 
       (LearningUnit 
         (Data $ Description "Linear Algebra" "Learn Linear Algebra")
-        (Data $ TimeData (fromGregorian 2021 1 1) (fromGregorian 2021 1 1) (fromGregorian 2021 1 1)) 
+        (Data $ TimeData (fromGregorian 2021 1 1) (fromGregorian 2021 1 1) (fromGregorian 2021 3 1) (Data $ fromGregorian 2021 2 1)) 
         (Data $ S.singleton (TaskType "exam")) 
         (Data S.empty) (Data NotStarted)
         (Data 1)
@@ -317,9 +359,10 @@ exampleProjectTree =
   , (2, Task 
       (LearningUnit 
         (Data $ Description "Group Theory" "Learn Group Theory")
-        (Data $ TimeData (fromGregorian 2021 1 1) (fromGregorian 2021 1 1) (fromGregorian 2021 1 1)) 
+        (Data $ TimeData (fromGregorian 2021 1 1) (fromGregorian 2021 1 1) (fromGregorian 2021 3 1) (Data $ fromGregorian 2021 2 1)) 
         (Data $ S.singleton (TaskType "exam")) 
-        (Data S.empty) (Data NotStarted)
+        (Data $ S.fromList [Progress (ProgressTrackingType "notes") (S.singleton $ Target "book") (ProgressInt 10 20), Progress (ProgressTrackingType "exercises") (S.singleton $ Target "book") (ProgressInt 30 30)]) 
+        (Data NotStarted)
         (Data 2) -- refered as node 1.2, or a list of integers [1,2]
       ))
   ])
