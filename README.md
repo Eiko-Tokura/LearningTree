@@ -8,6 +8,12 @@ It supports:
 - auto summary of progress
 - more features to come
 
+Core concepts:
+- Project: a big goal you want to achieve, like "learn algebraic geometry". Projects can be attached to a parent project, like "learn algebraic geometry" can be a subproject of "learn math".
+- Task: a small step to achieve a project, like "read chapter 1 of a specific book".
+- Projects form the nodes of the tree, and tasks form the leaves of the tree.
+- Only add progress to tasks, not projects. Projects will automatically update their progress based on the progress of their tasks.
+
 Example:
 
 ```
