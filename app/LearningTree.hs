@@ -6,7 +6,7 @@ module LearningTree
   , addTask, addProject, upgradeTaskToProject, localChangeTree, removeTaskOrProj, NodePath, ErrMsg
   , newTask, newProject, exampleProjectTree, PrettyPrint(..), PrintMode(..)
   , LU(..), OverallPriority(..), AskUserInput(..), LocalFunction, updateProgressFromTasks
-  , setStatus, setProgress, setLU, getSubTree
+  , setStatus, setProgress, setLU, getSubTree, updateCurrentTime
   ) where
 
 import AutoInput
@@ -242,6 +242,10 @@ addProject learnUnit projData (Project learnUnit' projData' projects) = Right $ 
 upgradeTaskToProject :: ProjectData -> LocalFunction -- ProjectTree -> Either ErrMsg ProjectTree
 upgradeTaskToProject _ Project{} = Left "Cannot upgrade a project to a project! You can only upgrade a task to a project."
 upgradeTaskToProject projData (Task learnUnit) = Right $ Project (coerce learnUnit) projData M.empty -- coerce is safe here because we are sure that the type is TaskNode, and the target type is ProjectNode
+
+updateCurrentTime :: Day -> ProjectTree -> ProjectTree
+updateCurrentTime time (Task learnUnit) = Task learnUnit { timeData = Data $ TimeData (dateCreated $ unData $ timeData learnUnit) (startDate $ unData $ timeData learnUnit) (endDate $ unData $ timeData learnUnit) (Data time) }
+updateCurrentTime time (Project learnUnit projData projects) = Project learnUnit { timeData = Data $ TimeData (dateCreated $ unData $ timeData learnUnit) (startDate $ unData $ timeData learnUnit) (endDate $ unData $ timeData learnUnit) (Data time) } projData projects
 
 getSubTree :: NodePath -> ProjectTree -> Either ErrMsg ProjectTree
 getSubTree [] tree = Right tree

@@ -119,7 +119,7 @@ performIOAction DisplayConcise plan = displayConcise plan
 
 askAction :: LearningPlan -> IO (Either ErrMsg (Either (UserAction IOAction) (UserAction TreeAction)))
 askAction plan = do
-  putStrLn "Please input the action you want to perform:"
+  putStrLn "\nPlease input the action you want to perform:"
   putStrLn "0: DisplayConcise  1: AddProject  2: AddTask  3: SetStatus  4: SetProgressTracking\n5: ModifyProgress  6: SetLU  7: DisplayDetail  8: Quit"
   action <- safeAskUserInput :: IO (Finite 0 8)
   case action of
@@ -148,9 +148,9 @@ askAction plan = do
           return $ Right . Right $ ModifyProgress path (ElemInSet choice) (ProgressInt newProgress b)
 
 displayConcise plan = do
-  putStrLn $ "Hello " ++ show (userName plan) ++ "!, here is your learning plan: \n"
+  putStrLn $ "Hello " ++ show (userName plan) ++ "!, here is your learning plan:"
   let Project _ _ mapProjects = root plan 
-  mapM_ putStrLn $ M.foldMapWithKey (\_ v -> [prettyPrint Concise v]) mapProjects
+  putStrLn $ concat $ M.foldMapWithKey (\_ v -> [prettyPrint Concise v]) mapProjects
 
 interAct :: LearningPlan -> IO LearningPlan
 interAct plan = do
@@ -174,7 +174,8 @@ userInterface = do -- first detect file, create and prompt username if not found
   fileExists <- doesFileExist filePathForLearningPlan
   if fileExists
     then do
-      plan <- read <$> readFile' filePathForLearningPlan
+      time <- utctDay <$> getCurrentTime
+      plan <- onProjectTree (updateCurrentTime time) . read <$> readFile' filePathForLearningPlan
       displayConcise plan
       plan' <- interAct plan
       writeFile filePathForLearningPlan (show plan')
